@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
 PYTHON_BIN="${VENV_DIR}/bin/python"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+RUNNER_SCRIPT="${REPO_ROOT}/scripts/run_launch_agent_watch.sh"
 PLIST_TEMPLATE="${REPO_ROOT}/launchd/com.hermes.session-s3-mirror.plist.template"
 PLIST_DEST="${HOME}/Library/LaunchAgents/com.hermes.session-s3-mirror.plist"
 LOG_DIR="${HERMES_HOME}/logs"
@@ -22,12 +23,13 @@ fi
 
 "${PYTHON_BIN}" -m pip install --upgrade pip >/dev/null
 "${PYTHON_BIN}" -m pip install -e "${REPO_ROOT}" >/dev/null
+chmod +x "${RUNNER_SCRIPT}"
 
 rm -rf "${SKILL_DEST}"
 cp -R "${SKILL_SRC}" "${SKILL_DEST}"
 
 sed \
-  -e "s|__PYTHON__|${PYTHON_BIN}|g" \
+  -e "s|__RUNNER__|${RUNNER_SCRIPT}|g" \
   -e "s|__HERMES_HOME__|${HERMES_HOME}|g" \
   -e "s|__WORKDIR__|${REPO_ROOT}|g" \
   -e "s|__STDOUT__|${STDOUT_LOG}|g" \
@@ -40,4 +42,5 @@ launchctl load "${PLIST_DEST}"
 printf 'Installed launch agent: %s\n' "${PLIST_DEST}"
 printf 'Installed Hermes skill: %s\n' "${SKILL_DEST}"
 printf 'Watcher logs: %s and %s\n' "${STDOUT_LOG}" "${STDERR_LOG}"
+printf 'Runner script: %s\n' "${RUNNER_SCRIPT}"
 

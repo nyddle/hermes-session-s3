@@ -20,7 +20,7 @@ metadata:
 
 # Hermes S3 Env Check
 
-Use this skill to verify that the external Hermes session S3 helper is ready to
+Use this skill to verify that the external Hermes session S3 plugin is ready to
 mirror `~/.hermes/sessions/*` into S3-compatible storage.
 
 ## What to do
@@ -31,9 +31,8 @@ Run the bundled checker:
 scripts/check_hermes_s3_env.sh
 ```
 
-When the required env vars are present, the standalone helper is ready to be
-started from the external `hermes-session-s3` repository or its installed
-`launchd` agent.
+When the required env vars are present and the `hermes-session-s3` plugin is
+installed, Hermes can mirror `~/.hermes/sessions/*` into S3 on session end.
 
 The checker reads:
 - the current process environment

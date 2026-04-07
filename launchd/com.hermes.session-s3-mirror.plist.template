@@ -6,10 +6,7 @@
   <string>com.hermes.session-s3-mirror</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__PYTHON__</string>
-    <string>-m</string>
-    <string>hermes_session_s3.cli</string>
-    <string>watch</string>
+    <string>__RUNNER__</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

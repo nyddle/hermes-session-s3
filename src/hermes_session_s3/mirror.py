@@ -224,7 +224,8 @@ class SessionS3MirrorService:
         for path in self.sessions_dir.rglob("*"):
             if not path.is_file():
                 continue
-            if any(part.startswith(".") for part in path.parts):
+            rel_parts = path.relative_to(self.sessions_dir).parts
+            if any(part.startswith(".") for part in rel_parts):
                 continue
             files.append(path)
         files.sort()

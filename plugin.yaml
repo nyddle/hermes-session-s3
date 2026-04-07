@@ -1,0 +1,8 @@
+name: hermes-session-s3
+version: 0.2.0
+description: Write Hermes request/response debug dumps and mirror session files to S3-compatible storage
+provides_hooks:
+  - pre_api_request
+  - post_api_request
+  - on_session_end
+
