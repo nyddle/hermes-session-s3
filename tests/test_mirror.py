@@ -66,6 +66,7 @@ def test_scan_once_uploads_changed_files_and_persists_state(tmp_path, monkeypatc
     assert payload["sessionId"] == "s1"
     assert payload["url"] == "https://example.com/responses"
     assert payload["source"] == "cli"
+    assert payload["headers"]["Authorization"] == "[REDACTED]"
     assert fake_client.calls[1]["Key"].endswith("/s1/README.md")
 
     state = json.loads(state_file.read_text(encoding="utf-8"))
@@ -134,3 +135,34 @@ def test_scan_once_reuploads_modified_files_and_skips_hidden_files(tmp_path, mon
     assert len(fake_client.calls) == 3
     assert all(".ignore-me" not in call["Key"] for call in fake_client.calls)
     assert all("chat.jsonl" not in call["Key"] for call in fake_client.calls)
+
+
+def test_scan_once_sanitizes_nested_secrets(tmp_path, monkeypatch):
+    service, fake_client, sessions_dir, _ = _configured_service(tmp_path, monkeypatch)
+
+    response_file = sessions_dir / "response_dump_s3_2026-04-08T00-20-30-123Z_deadbeef.json"
+    response_file.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-08T00:20:31Z",
+                "session_id": "s3",
+                "response": {
+                    "status": 200,
+                    "headers": {"Set-Cookie": "abc=123"},
+                    "body": {
+                        "access_token": "secret-token",
+                        "nested": {"apiKey": "top-secret"},
+                        "items": [{"password": "pw"}],
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert service.scan_once(force=True) == 2
+    payload = json.loads(fake_client.calls[0]["Body"].decode("utf-8"))
+    assert payload["headers"]["Set-Cookie"] == "[REDACTED]"
+    assert payload["body"]["access_token"] == "[REDACTED]"
+    assert payload["body"]["nested"]["apiKey"] == "[REDACTED]"
+    assert payload["body"]["items"][0]["password"] == "[REDACTED]"

@@ -22,7 +22,7 @@ DEFAULT_REGION = "ru-central-1"
 DEFAULT_PREFIX = "hermes-sessions"
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 DEFAULT_SETTLE_SECONDS = 2.0
-STATE_VERSION = 2
+STATE_VERSION = 3
 
 REQUEST_DUMP_RE = re.compile(
     r"^request_dump_(?P<session_id>.+)_(?P<token>(?:\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-f]{8}|\d{8}_\d{6}_\d{6}))\.json$"
@@ -32,6 +32,7 @@ RESPONSE_DUMP_RE = re.compile(
 )
 NEW_TOKEN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-f]{8}$")
 OLD_TOKEN_RE = re.compile(r"^\d{8}_\d{6}_\d{6}$")
+REDACT_KEY_RE = re.compile(r"authorization|api[-_]?key|secret|token|password|cookie", re.IGNORECASE)
 
 
 def get_hermes_home() -> Path:
@@ -51,6 +52,30 @@ def atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temp_path.replace(path)
+
+
+def should_redact_key(key: str) -> bool:
+    return bool(REDACT_KEY_RE.search(key))
+
+
+def sanitize(value: Any) -> Any:
+    if isinstance(value, list):
+        return [sanitize(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: ("[REDACTED]" if should_redact_key(str(key)) else sanitize(item))
+            for key, item in value.items()
+        }
+    return value
+
+
+def sanitize_headers(headers: Any) -> dict[str, Any]:
+    if not isinstance(headers, dict):
+        return {}
+    return {
+        str(key): ("[REDACTED]" if should_redact_key(str(key)) else value)
+        for key, value in headers.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -393,8 +418,8 @@ class SessionS3MirrorService:
                 "source": payload.get("platform") or payload.get("provider") or "unknown",
                 "url": request.get("url"),
                 "method": request.get("method") or "POST",
-                "headers": request.get("headers") or {},
-                "body": request.get("body"),
+                "headers": sanitize_headers(request.get("headers")),
+                "body": sanitize(request.get("body")),
             }
 
         response = payload.get("response")
@@ -404,8 +429,8 @@ class SessionS3MirrorService:
             "timestamp": timestamp,
             "sessionId": session_id,
             "status": response.get("status"),
-            "headers": response.get("headers") or {},
-            "body": response.get("body"),
+            "headers": sanitize_headers(response.get("headers")),
+            "body": sanitize(response.get("body")),
         }
 
     @staticmethod
