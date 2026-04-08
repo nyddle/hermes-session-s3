@@ -21,6 +21,29 @@ Optional defaults:
 - `AWS_DEFAULT_REGION=ru-central-1`
 - `HERMES_SESSIONS_S3_PREFIX=hermes-sessions`
 
+## Quick start for teammates
+
+Clone the repository, create a virtualenv, install the package, and link the
+plugin into Hermes:
+
+```bash
+git clone <git-url-to-this-repo>
+cd hermes-session-s3
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .
+scripts/install_plugin.sh
+```
+
+Check that the required S3 variables are configured:
+
+```bash
+~/.hermes/skills/hermes-s3-env-check/scripts/check_hermes_s3_env.sh
+```
+
+If the check is green, restart Hermes. After that, Hermes will start writing
+request and response dumps locally and mirroring them to S3 automatically.
+
 ## Local setup
 
 ```bash
@@ -43,7 +66,8 @@ Install the plugin locally for Hermes:
 scripts/install_plugin.sh
 ```
 
-For teammates with a remote repo URL, the preferred install path is Hermes itself:
+If the repository is published at a remote Git URL, Hermes can install it
+directly:
 
 ```bash
 hermes plugins install <git-url-to-this-repo>
@@ -74,3 +98,15 @@ The uploaded objects follow the same layout as free_code:
 
 Hermes session transcripts such as `session_*.json` and `*.jsonl` remain local
 and are no longer mirrored into S3.
+
+## What teammates should expect
+
+Locally in `~/.hermes/sessions/`:
+- `request_dump_*.json`
+- `response_dump_*.json`
+- `session_*.json` and `*.jsonl` stay local only
+
+In S3:
+- `<prefix>/<YYYY-MM>-<username>/<session-id>/README.md`
+- `<prefix>/<YYYY-MM>-<username>/<session-id>/<timestamp>_<id>_request.json`
+- `<prefix>/<YYYY-MM>-<username>/<session-id>/<timestamp>_<id>_response.json`
