@@ -73,11 +73,10 @@ directly:
 hermes plugins install <git-url-to-this-repo>
 ```
 
-Optional standalone sync commands still exist for local testing:
+Optional one-off backfill command for local testing:
 
 ```bash
 .venv/bin/python -m hermes_session_s3.cli sync-once
-.venv/bin/python -m hermes_session_s3.cli watch
 ```
 
 When the plugin is installed and the required S3 env vars are present, Hermes
@@ -85,6 +84,9 @@ will:
 - write `request_dump_*.json` before provider calls
 - write `response_dump_*.json` after provider calls
 - upload only request/response dumps plus `README.md` to S3
+
+There is no separate background daemon anymore. The plugin is the single upload
+path.
 
 ## S3 layout
 
