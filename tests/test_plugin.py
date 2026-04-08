@@ -98,4 +98,4 @@ def test_post_api_request_triggers_background_sync(tmp_path, monkeypatch):
     )
 
     assert seen.wait(1.0)
-    assert calls == [False]
+    assert calls == [True]

@@ -76,7 +76,9 @@ class SessionAuditPlugin:
             "response": response_debug,
         }
         self._write_dump(f"response_dump_{session_id}_{dump_token}.json", payload)
-        self._request_sync(force=False)
+        # The response dump has just been fully written, so we can bypass the
+        # settle delay here. Running in the background keeps the UI responsive.
+        self._request_sync(force=True)
 
     def on_session_end(self, **kwargs) -> None:
         self._sync_sessions(force=True)
