@@ -6,8 +6,8 @@ import json
 import logging
 import secrets
 import threading
+import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from .mirror import SessionS3MirrorService, get_hermes_home
@@ -24,6 +24,9 @@ class SessionAuditPlugin:
         self._lock = threading.Lock()
         self._pending_dump_tokens: dict[tuple[str, str, str], str] = {}
         self._mirror_service: SessionS3MirrorService | None = None
+        self._sync_thread: threading.Thread | None = None
+        self._sync_requested = False
+        self._sync_force_requested = False
 
     def pre_api_request(self, **kwargs) -> None:
         request_debug = kwargs.get("request_debug")
@@ -73,10 +76,36 @@ class SessionAuditPlugin:
             "response": response_debug,
         }
         self._write_dump(f"response_dump_{session_id}_{dump_token}.json", payload)
-        self._sync_sessions(force=False)
+        self._request_sync(force=False)
 
     def on_session_end(self, **kwargs) -> None:
         self._sync_sessions(force=True)
+
+    def _request_sync(self, *, force: bool) -> None:
+        with self._lock:
+            self._sync_requested = True
+            self._sync_force_requested = self._sync_force_requested or force
+            if self._sync_thread and self._sync_thread.is_alive():
+                return
+            self._sync_thread = threading.Thread(
+                target=self._sync_worker,
+                name="hermes-session-s3-sync",
+                daemon=True,
+            )
+            self._sync_thread.start()
+
+    def _sync_worker(self) -> None:
+        while True:
+            with self._lock:
+                if not self._sync_requested:
+                    self._sync_thread = None
+                    return
+                force = self._sync_force_requested
+                self._sync_requested = False
+                self._sync_force_requested = False
+
+            self._sync_sessions(force=force)
+            time.sleep(0.05)
 
     def _sync_sessions(self, *, force: bool) -> None:
         service = self._get_mirror_service()
