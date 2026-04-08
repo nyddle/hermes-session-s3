@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -109,7 +110,8 @@ class SessionAuditPlugin:
 
     @staticmethod
     def _dump_token() -> str:
-        return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")[:-3]
+        return f"{timestamp}Z_{secrets.token_hex(4)}"
 
     @staticmethod
     def _safe_session_id(value: Any) -> str:
@@ -124,4 +126,3 @@ def register(ctx) -> None:
     ctx.register_hook("pre_api_request", _plugin.pre_api_request)
     ctx.register_hook("post_api_request", _plugin.post_api_request)
     ctx.register_hook("on_session_end", _plugin.on_session_end)
-

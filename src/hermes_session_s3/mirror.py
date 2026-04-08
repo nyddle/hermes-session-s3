@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
 import logging
-import mimetypes
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -21,7 +22,16 @@ DEFAULT_REGION = "ru-central-1"
 DEFAULT_PREFIX = "hermes-sessions"
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 DEFAULT_SETTLE_SECONDS = 2.0
-STATE_VERSION = 1
+STATE_VERSION = 2
+
+REQUEST_DUMP_RE = re.compile(
+    r"^request_dump_(?P<session_id>.+)_(?P<token>(?:\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-f]{8}|\d{8}_\d{6}_\d{6}))\.json$"
+)
+RESPONSE_DUMP_RE = re.compile(
+    r"^response_dump_(?P<session_id>.+)_(?P<token>(?:\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-f]{8}|\d{8}_\d{6}_\d{6}))\.json$"
+)
+NEW_TOKEN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-f]{8}$")
+OLD_TOKEN_RE = re.compile(r"^\d{8}_\d{6}_\d{6}$")
 
 
 def get_hermes_home() -> Path:
@@ -82,7 +92,7 @@ class SessionS3MirrorConfig:
 
 
 class SessionS3MirrorService:
-    """Best-effort poller that mirrors session files into S3."""
+    """Best-effort poller that uploads request/response dumps in free_code layout."""
 
     def __init__(
         self,
@@ -150,11 +160,18 @@ class SessionS3MirrorService:
 
         state = self._load_state()
         file_state = state.setdefault("files", {})
+        readme_state = state.setdefault("readmes", {})
         now = time.time()
         uploaded = 0
+        pending_readmes: dict[str, str] = {}
 
         for path in self._iter_files():
             rel_path = path.relative_to(self.sessions_dir).as_posix()
+            parsed = self._parse_dump_name(path.name)
+            if parsed is None:
+                continue
+
+            kind, session_id, token = parsed
             try:
                 stat = path.stat()
             except FileNotFoundError:
@@ -170,23 +187,38 @@ class SessionS3MirrorService:
                     continue
 
             try:
-                body = path.read_bytes()
+                raw_payload = json.loads(path.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 continue
             except Exception:
-                logger.warning("Failed to read session file: %s", path, exc_info=True)
+                logger.warning("Failed to parse dump file: %s", path, exc_info=True)
                 continue
 
-            key = self._build_s3_key(rel_path)
-            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            upload_payload = self._build_upload_payload(
+                kind=kind,
+                session_id=session_id,
+                payload=raw_payload,
+            )
+            if upload_payload is None:
+                continue
+
+            key = self._build_s3_key(
+                session_id=session_id,
+                filename=f"{self._canonical_stem(token)}_{kind}.json",
+            )
+            body = json.dumps(upload_payload, ensure_ascii=False, indent=2).encode("utf-8")
 
             try:
                 client.put_object(
                     Bucket=self.config.bucket,
                     Key=key,
                     Body=body,
-                    ContentType=content_type,
-                    Metadata={"source": "hermes-sessions", "relative-path": rel_path},
+                    ContentType="application/json",
+                    Metadata={
+                        "source": "hermes-session-s3",
+                        "relative-path": rel_path,
+                        "session-id": session_id,
+                    },
                 )
             except Exception:
                 logger.warning(
@@ -199,6 +231,37 @@ class SessionS3MirrorService:
                 continue
 
             file_state[rel_path] = current_sig
+            uploaded += 1
+            pending_readmes[session_id] = self._build_session_readme(
+                session_id=session_id,
+                payload=raw_payload,
+            )
+
+        for session_id, readme in pending_readmes.items():
+            readme_hash = hashlib.sha256(readme.encode("utf-8")).hexdigest()
+            if readme_state.get(session_id) == readme_hash:
+                continue
+
+            key = self._build_s3_key(session_id=session_id, filename="README.md")
+            try:
+                client.put_object(
+                    Bucket=self.config.bucket,
+                    Key=key,
+                    Body=readme.encode("utf-8"),
+                    ContentType="text/markdown",
+                    Metadata={"source": "hermes-session-s3", "session-id": session_id},
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to mirror README for session %s -> s3://%s/%s",
+                    session_id,
+                    self.config.bucket,
+                    key,
+                    exc_info=True,
+                )
+                continue
+
+            readme_state[session_id] = readme_hash
             uploaded += 1
 
         if uploaded > 0:
@@ -227,23 +290,32 @@ class SessionS3MirrorService:
             rel_parts = path.relative_to(self.sessions_dir).parts
             if any(part.startswith(".") for part in rel_parts):
                 continue
+            if self._parse_dump_name(path.name) is None:
+                continue
             files.append(path)
         files.sort()
         return files
 
-    def _build_s3_key(self, rel_path: str) -> str:
+    def _build_s3_key(self, *, session_id: str, filename: str) -> str:
         month_and_user = f"{datetime.now():%Y-%m}-{getpass.getuser() or 'unknown'}"
-        return "/".join([self.config.prefix, month_and_user, rel_path])
+        return "/".join([self.config.prefix, month_and_user, session_id, filename])
 
     def _load_state(self) -> dict[str, Any]:
         if not self.state_file.exists():
-            return {"version": STATE_VERSION, "files": {}}
+            return {"version": STATE_VERSION, "files": {}, "readmes": {}}
 
         try:
-            return json.loads(self.state_file.read_text(encoding="utf-8"))
+            state = json.loads(self.state_file.read_text(encoding="utf-8"))
         except Exception:
             logger.debug("Failed to read state file %s", self.state_file, exc_info=True)
-            return {"version": STATE_VERSION, "files": {}}
+            return {"version": STATE_VERSION, "files": {}, "readmes": {}}
+
+        if state.get("version") != STATE_VERSION:
+            return {"version": STATE_VERSION, "files": {}, "readmes": {}}
+
+        state.setdefault("files", {})
+        state.setdefault("readmes", {})
+        return state
 
     def _save_state(self, state: dict[str, Any]) -> None:
         try:
@@ -274,3 +346,82 @@ class SessionS3MirrorService:
         )
         return self._client
 
+    @staticmethod
+    def _parse_dump_name(name: str) -> tuple[str, str, str] | None:
+        request_match = REQUEST_DUMP_RE.match(name)
+        if request_match:
+            return ("request", request_match.group("session_id"), request_match.group("token"))
+
+        response_match = RESPONSE_DUMP_RE.match(name)
+        if response_match:
+            return ("response", response_match.group("session_id"), response_match.group("token"))
+
+        return None
+
+    @staticmethod
+    def _canonical_stem(token: str) -> str:
+        if NEW_TOKEN_RE.fullmatch(token):
+            return token
+
+        if not OLD_TOKEN_RE.fullmatch(token):
+            return token
+
+        date_part, time_part, micro_part = token.split("_")
+        millis = micro_part[:3]
+        suffix = micro_part[3:] or micro_part
+        return (
+            f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+            f"T{time_part[:2]}-{time_part[2:4]}-{time_part[4:6]}-{millis}Z_{suffix}"
+        )
+
+    @staticmethod
+    def _build_upload_payload(
+        *,
+        kind: str,
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        timestamp = payload.get("timestamp")
+
+        if kind == "request":
+            request = payload.get("request")
+            if not isinstance(request, dict):
+                return None
+            return {
+                "timestamp": timestamp,
+                "sessionId": session_id,
+                "source": payload.get("platform") or payload.get("provider") or "unknown",
+                "url": request.get("url"),
+                "method": request.get("method") or "POST",
+                "headers": request.get("headers") or {},
+                "body": request.get("body"),
+            }
+
+        response = payload.get("response")
+        if not isinstance(response, dict):
+            return None
+        return {
+            "timestamp": timestamp,
+            "sessionId": session_id,
+            "status": response.get("status"),
+            "headers": response.get("headers") or {},
+            "body": response.get("body"),
+        }
+
+    @staticmethod
+    def _build_session_readme(*, session_id: str, payload: dict[str, Any]) -> str:
+        platform = payload.get("platform") or "unknown"
+        provider = payload.get("provider") or "unknown"
+        model = payload.get("model") or payload.get("response_model") or "unknown"
+        lines = [
+            "# Hermes Session Logs",
+            "",
+            f"- Session ID: `{session_id}`",
+            f"- Platform: `{platform}`",
+            f"- Provider: `{provider}`",
+            f"- Model: `{model}`",
+            "",
+            "This directory mirrors Hermes request/response debug dumps to S3",
+            "using the same layout as free_code model logs.",
+        ]
+        return "\n".join(lines) + "\n"

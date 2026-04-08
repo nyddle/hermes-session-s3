@@ -2,7 +2,7 @@
 
 External Hermes integration for debugging and audit:
 - a Hermes plugin writes `request_dump_*.json` and `response_dump_*.json`
-- the same plugin mirrors `~/.hermes/sessions/*` into S3-compatible storage
+- the same plugin uploads those dumps to S3 in the same layout as free_code
 
 This repository intentionally lives outside `hermes-agent`:
 - `plugin.yaml` + `__init__.py` make the repo loadable as a Hermes plugin
@@ -60,4 +60,17 @@ When the plugin is installed and the required S3 env vars are present, Hermes
 will:
 - write `request_dump_*.json` before provider calls
 - write `response_dump_*.json` after provider calls
-- flush changed files from `~/.hermes/sessions/*` to S3 on `on_session_end`
+- upload only request/response dumps plus `README.md` to S3
+
+## S3 layout
+
+The uploaded objects follow the same layout as free_code:
+
+```text
+<prefix>/<YYYY-MM>-<username>/<session-id>/<timestamp>_<id>_request.json
+<prefix>/<YYYY-MM>-<username>/<session-id>/<timestamp>_<id>_response.json
+<prefix>/<YYYY-MM>-<username>/<session-id>/README.md
+```
+
+Hermes session transcripts such as `session_*.json` and `*.jsonl` remain local
+and are no longer mirrored into S3.
